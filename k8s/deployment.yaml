@@ -1,43 +1,34 @@
-name: CI-CD
-on:
-  push:
-    branches: [main]
-
-env:
-  AWS_REGION: ap-south-1
-  ECR_REPO: demo-app
-
-jobs:
-  pipeline:
-    runs-on: self-hosted
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Run tests
-        run: |
-          python3 -m venv venv
-          . venv/bin/activate
-          pip install -r requirements.txt
-          pytest
-
-      - name: Build and push to ECR
-        run: |
-          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-          REGISTRY=$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
-          aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $REGISTRY
-          IMAGE=$REGISTRY/$ECR_REPO:${{ github.sha }}
-          docker build -t $IMAGE .
-          docker push $IMAGE
-          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
-          echo "REGISTRY=$REGISTRY" >> $GITHUB_ENV
-
-      - name: Deploy to minikube
-        run: |
-          kubectl delete secret ecr-secret --ignore-not-found
-          kubectl create secret docker-registry ecr-secret \
-            --docker-server=$REGISTRY \
-            --docker-username=AWS \
-            --docker-password=$(aws ecr get-login-password --region $AWS_REGION)
-          sed -i "s|IMAGE_PLACEHOLDER|$IMAGE|" k8s/deployment.yaml
-          kubectl apply -f k8s/deployment.yaml
-          kubectl rollout status deployment/demo-app
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo-app
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: demo-app
+  template:
+    metadata:
+      labels:
+        app: demo-app
+    spec:
+      imagePullSecrets:
+        - name: ecr-secret
+      containers:
+        - name: demo-app
+          image: IMAGE_PLACEHOLDER
+          ports:
+            - containerPort: 5000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: demo-app
+spec:
+  type: NodePort
+  selector:
+    app: demo-app
+  ports:
+    - port: 80
+      targetPort: 5000
+      nodePort: 30080
